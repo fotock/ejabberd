@@ -5,7 +5,7 @@
 %%% Created : 8 Dec 2011 by Badlop
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2017   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -25,7 +25,7 @@
 
 -module(ejabberd_regexp).
 
--compile([export_all]).
+-export([exec/2, run/2, split/2, replace/3, greplace/3, sh_to_awk/1]).
 
 exec({ReM, ReF, ReA}, {RgM, RgF, RgA}) ->
     try apply(ReM, ReF, ReA) catch

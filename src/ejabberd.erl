@@ -5,7 +5,7 @@
 %%% Created : 16 Nov 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2017   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -37,7 +37,7 @@
 -protocol({xep, 270, '1.0'}).
 
 -export([start/0, stop/0, start_app/1, start_app/2,
-	 get_pid_file/0, check_app/1]).
+	 get_pid_file/0, check_app/1, module_name/1]).
 
 -include("logger.hrl").
 
@@ -79,7 +79,7 @@ is_loaded() ->
 start_app(App, Type, StartFlag) when not is_list(App) ->
     start_app([App], Type, StartFlag);
 start_app([App|Apps], Type, StartFlag) ->
-    case application:start(App) of
+    case application:start(App,Type) of
         ok ->
             spawn(fun() -> check_app_modules(App, StartFlag) end),
             start_app(Apps, Type, StartFlag);
@@ -105,8 +105,6 @@ start_app([], _Type, _StartFlag) ->
     ok.
 
 check_app_modules(App, StartFlag) ->
-    {A, B, C} = p1_time_compat:timestamp(),
-    random:seed(A, B, C),
     sleep(5000),
     case application:get_key(App, modules) of
         {ok, Mods} ->
@@ -140,7 +138,7 @@ exit_or_halt(Reason, StartFlag) ->
     end.
 
 sleep(N) ->
-    timer:sleep(random:uniform(N)).
+    timer:sleep(randoms:uniform(N)).
 
 get_module_file(App, Mod) ->
     BaseName = atom_to_list(Mod),
@@ -150,3 +148,29 @@ get_module_file(App, Mod) ->
         Dir ->
             filename:join([Dir, BaseName ++ ".beam"])
     end.
+
+module_name([Dir, _, <<H,_/binary>> | _] = Mod) when H >= 65, H =< 90 ->
+    Module = str:join([elixir_name(M) || M<-tl(Mod)], <<>>),
+    Prefix = case elixir_name(Dir) of
+	<<"Ejabberd">> -> <<"Elixir.Ejabberd.">>;
+	Lib -> <<"Elixir.Ejabberd.", Lib/binary, ".">>
+    end,
+    misc:binary_to_atom(<<Prefix/binary, Module/binary>>);
+module_name([<<"ejabberd">> | _] = Mod) ->
+    Module = str:join([erlang_name(M) || M<-Mod], $_),
+    misc:binary_to_atom(Module);
+module_name(Mod) when is_list(Mod) ->
+    Module = str:join([erlang_name(M) || M<-tl(Mod)], $_),
+    misc:binary_to_atom(Module).
+
+elixir_name(Atom) when is_atom(Atom) ->
+    elixir_name(misc:atom_to_binary(Atom));
+elixir_name(<<H,T/binary>>) when H >= 65, H =< 90 ->
+    <<H, T/binary>>;
+elixir_name(<<H,T/binary>>) ->
+    <<(H-32), T/binary>>.
+
+erlang_name(Atom) when is_atom(Atom) ->
+    misc:atom_to_binary(Atom);
+erlang_name(Bin) when is_binary(Bin) ->
+    Bin.

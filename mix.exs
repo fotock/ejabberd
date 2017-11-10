@@ -3,61 +3,138 @@ defmodule Ejabberd.Mixfile do
 
   def project do
     [app: :ejabberd,
-     version: "16.01.0",
-     elixir: "~> 1.1",
+     version: "17.9.0",
+     description: description(),
+     elixir: "~> 1.4",
      elixirc_paths: ["lib"],
      compile_path: ".",
      compilers: [:asn1] ++ Mix.compilers,
-     erlc_options: erlc_options,
+     erlc_options: erlc_options(),
      erlc_paths: ["asn1", "src"],
-     package: package,
-     deps: deps]
+     # Elixir tests are starting the part of ejabberd they need
+     aliases: [test: "test --no-start"],
+     package: package(),
+     deps: deps()]
+  end
+
+  def description do
+    """
+    Robust, ubiquitous and massively scalable Jabber / XMPP Instant Messaging platform.
+    """
   end
 
   def application do
     [mod: {:ejabberd_app, []},
-     applications: [:ssl, :mnesia],
-     included_applications: [:lager, :p1_utils, :cache_tab,
-                             :p1_tls, :p1_stringprep, :p1_xml,
-                             :p1_stun, :p1_yaml, :p1_zlib, :p1_iconv,
-                             :esip, :jiffy, :oauth2, :xmlrpc, :eredis,
-                             :p1_mysql, :p1_pgsql, :sqlite3]]
+     applications: [:ssl],
+     included_applications: [:lager, :mnesia, :inets, :p1_utils, :cache_tab,
+                             :fast_tls, :stringprep, :fast_xml, :xmpp,
+                             :stun, :fast_yaml, :esip, :jiffy, :p1_oauth2]
+                         ++ cond_apps()]
+  end
+
+  defp if_function_exported(mod, fun, arity, okResult) do
+    :code.ensure_loaded(mod)
+    if :erlang.function_exported(mod, fun, arity) do
+      okResult
+    else
+      []
+    end
   end
 
   defp erlc_options do
     # Use our own includes + includes from all dependencies
-    includes = ["include"] ++ Path.wildcard(Path.join("..", "/*/include"))
-    [:debug_info] ++ Enum.map(includes, fn(path) -> {:i, path} end)
+    includes = ["include"] ++ deps_include(["fast_xml", "xmpp", "p1_utils"])
+    [:debug_info, {:d, :ELIXIR_ENABLED}] ++ cond_options() ++ Enum.map(includes, fn(path) -> {:i, path} end) ++
+    if_function_exported(:crypto, :strong_rand_bytes, 1, [{:d, :STRONG_RAND_BYTES}]) ++
+    if_function_exported(:rand, :uniform, 1, [{:d, :RAND_UNIFORM}]) ++
+    if_function_exported(:gb_sets, :iterator_from, 2, [{:d, :GB_SETS_ITERATOR_FROM}]) ++
+    if_function_exported(:public_key, :short_name_hash, 1, [{:d, :SHORT_NAME_HASH}])
+  end
+
+  defp cond_options do
+    for {:true, option} <- [{config(:graphics), {:d, :GRAPHICS}}], do:
+    option
   end
 
   defp deps do
-    [{:lager, git: "https://github.com/basho/lager", tag: "3.0.2"},
-     {:p1_utils, git: "https://github.com/processone/p1_utils", tag: "1.0.2"},
-     {:cache_tab, git: "https://github.com/processone/cache_tab", tag: "1.0.1"},
-     {:p1_tls, git: "https://github.com/processone/tls", tag: "1.0.0"},
-     {:p1_stringprep, git: "https://github.com/processone/stringprep", tag: "1.0.0"},
-     {:p1_xml, git: "https://github.com/processone/xml", tag: "1.1.1"},
-     {:p1_stun, git: "https://github.com/processone/stun", tag: "0.9.0"},
-     {:esip, git: "https://github.com/processone/p1_sip", tag: "1.0.0"},
-     {:p1_yaml, git: "https://github.com/processone/p1_yaml", tag: "1.0.0"},
-     {:jiffy, git: "https://github.com/davisp/jiffy", tag: "0.14.5"},
-     {:oauth2, git: "https://github.com/kivra/oauth2", "8d129fbf8866930b4ffa6dd84e65bd2b32b9acb8"},
-     {:xmlrpc, git: "https://github.com/rds13/xmlrpc.git", tag: "1.15"},
-     {:p1_mysql, git: "https://github.com/processone/mysql", tag: "1.0.0"},
-     {:p1_pgsql, git: "https://github.com/processone/pgsql", tag: "1.0.0"},
-     {:sqlite3, git: "https://github.com/alexeyr/erlang-sqlite3", "cbc3505f7a131254265d3ef56191b2581b8cc172"},
-     {:p1_zlib, git: "https://github.com/processone/zlib", tag: "1.0.0"},
-     {:p1_iconv, git: "https://github.com/processone/eiconv", tag: "0.9.0"},
-     {:eredis, git: "https://github.com/wooga/eredis", tag: "v1.0.8"},
-     {:exrm, "0.19.9"}]
+    [{:lager, "~> 3.4.0"},
+     {:p1_utils, "~> 1.0"},
+     {:fast_xml, "~> 1.1"},
+     {:xmpp, "~> 1.1"},
+     {:cache_tab, "~> 1.0"},
+     {:stringprep, "~> 1.0"},
+     {:fast_yaml, "~> 1.0"},
+     {:fast_tls, "~> 1.0"},
+     {:stun, "~> 1.0"},
+     {:esip, "~> 1.0"},
+     {:jiffy, "~> 0.14.7"},
+     {:p1_oauth2, "~> 0.6.1"},
+     {:distillery, "~> 1.0"},
+     {:ex_doc, ">= 0.0.0", only: :dev},
+     {:fs, "~> 2.12.0"}]
+    ++ cond_deps()
+  end
+
+  defp deps_include(deps) do
+    base = case Mix.Project.deps_paths()[:ejabberd] do
+      nil -> "deps"
+      _ -> ".."
+    end
+    Enum.map(deps, fn dep -> base<>"/#{dep}/include" end)
+  end
+
+  defp cond_deps do
+    for {:true, dep} <- [{config(:mysql), {:p1_mysql, "~> 1.0"}},
+                         {config(:pgsql), {:p1_pgsql, "~> 1.1"}},
+                         {config(:sqlite), {:sqlite3, "~> 1.1"}},
+                         {config(:riak), {:riakc, "~> 2.4"}},
+                         {config(:redis), {:eredis, "~> 1.0"}},
+                         {config(:zlib), {:ezlib, "~> 1.0"}},
+                         {config(:iconv), {:iconv, "~> 1.0"}},
+                         {config(:pam), {:epam, "~> 1.0"}},
+                         {config(:tools), {:luerl, github: "rvirding/luerl", tag: "v0.2"}},
+                         {config(:tools), {:meck, "~> 0.8.4"}},
+                         {config(:tools), {:moka, github: "processone/moka", tag: "1.0.5c"}},
+                         {config(:graphics), {:eimp, github: "processone/eimp", tag: "1.0.1"}}], do:
+      dep
+  end
+
+  defp cond_apps do
+    for {:true, app} <- [{config(:redis), :eredis},
+                         {config(:mysql), :p1_mysql},
+                         {config(:pgsql), :p1_pgsql},
+                         {config(:sqlite), :sqlite3},
+                         {config(:zlib), :ezlib},
+                         {config(:iconv), :iconv},
+                         {config(:graphics), :eimp}], do:
+      app
   end
 
   defp package do
-    [licenses: ["GPLv2"],
-     links: %{"Site" => "https://www.ejabberd.im",
-              "Documentation" => "http://docs.ejabberd.im",
-              "Source" => "https://github.com/processone/ejabberd"}]
+    [# These are the default files included in the package
+      files: ["lib", "src", "priv", "mix.exs", "include", "README.md", "COPYING"],
+      maintainers: ["ProcessOne"],
+      licenses: ["GPLv2"],
+      links: %{"Site" => "https://www.ejabberd.im",
+               "Documentation" => "http://docs.ejabberd.im",
+               "Source" => "https://github.com/processone/ejabberd",
+               "ProcessOne" => "http://www.process-one.net/"}]
   end
+
+  defp vars do
+    case :file.consult("vars.config") do
+      {:ok,config} -> config
+      _ -> [zlib: true, iconv: true]
+    end
+  end
+
+  defp config(key) do
+    case vars()[key] do
+      nil -> false
+      value -> value
+    end
+  end
+
 end
 
 defmodule Mix.Tasks.Compile.Asn1 do
@@ -76,7 +153,12 @@ defmodule Mix.Tasks.Compile.Asn1 do
     mappings     = Enum.zip(source_paths, dest_paths)
     options      = project[:asn1_options] || []
 
-    Erlang.compile(manifest(), mappings, :asn1, :erl, opts[:force], fn
+    force = case opts[:force] do
+        :true -> [force: true]
+        _ -> [force: false]
+    end
+
+    Erlang.compile(manifest(), mappings, :asn1, :erl, force, fn
       input, output ->
         options = options ++ [:noobj, outdir: Erlang.to_erl_file(Path.dirname(output))]
         case :asn1ct.compile(Erlang.to_erl_file(input), options) do
@@ -86,7 +168,7 @@ defmodule Mix.Tasks.Compile.Asn1 do
     end)
   end
 
-  def manifests, do: [manifest]
+  def manifests, do: [manifest()]
   defp manifest, do: Path.join(Mix.Project.manifest_path, @manifest)
 
   def clean, do: Erlang.clean(manifest())
